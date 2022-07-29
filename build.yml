@@ -1,0 +1,49 @@
+---
+setup:
+  - REMOVE=mysql-server
+  - [debconf-utils, maven, openjdk-11-jdk, curl, wget, nodejs, npm]
+  - URL=https://github.com/chrisparnin/checkbox.io-micro-preview  # URL to fetch repo
+  - CMD=echo "mysql-server mysql-server/root_password password {{ MY_SQL_PASSWORD }}" | sudo debconf-set-selections
+  - CMD=echo "mysql-server mysql-server/root_password_again password {{ MY_SQL_PASSWORD }}" | sudo debconf-set-selections
+  - [mysql-server, mysql-client]
+
+jobs:
+  - name: itrust-build
+    steps:
+      - name: Clone iTrust Repository
+        url: 'https://{{ GIT_TOKEN }}@{{ GIT_REPO }}'
+      - name: Update password
+        run: 'sudo sed -i "s/password:/password: {{ MY_SQL_PASSWORD }}/g" iTrust2-v10/iTrust2/src/main/resources/application.yml.template'
+      - name: Update driver
+        run: sudo sed -i s/com.mysql.jdbc/com.mysql.cj.jdbc/g iTrust2-v10/iTrust2/src/main/resources/application.yml.template
+      - name: Rename file
+        run: sudo mv iTrust2-v10/iTrust2/src/main/resources/application.yml.template iTrust2-v10/iTrust2/src/main/resources/application.yml
+      - name: Build iTrust with Maven
+        run: cd iTrust2-v10/iTrust2 && sudo mvn --batch-mode --update-snapshots clean test
+      - name: Change Mode of Execution
+        run: sudo chmod -R 777 ~/iTrust2-v10/iTrust2/target/ && sudo chmod 777 ~/iTrust2-v10/iTrust2/target/classes/application.yml
+      - name: Generate jar file
+        run: cd iTrust2-v10/iTrust2 && sudo mvn clean package -Dmaven.test.skip=true
+      
+  - name: itrust-deploy
+    steps:
+      - name: Push war file to the droplet green
+        run: "scp -o IdentityFile=/home/vagrant/.ssh/devops_rsa /home/vagrant/iTrust2-v10/iTrust2/target/iTrust2-10.jar 'root@{{ green }}:/root/'"
+      - name: Push war file to the droplet blue
+        run: "scp -o IdentityFile=/home/vagrant/.ssh/devops_rsa /home/vagrant/iTrust2-v10/iTrust2/target/iTrust2-10.jar 'root@{{ blue }}:/root/'"
+      - name: Kill current existing process for java
+        runserver: sudo killall -9 'java' || true
+      - name: Execute the jar file 
+        runserver: java -jar ~/iTrust2-10.jar --server.port=8080
+      
+  - name: mutation-coverage
+    steps:
+      - name: Mutation testing 
+        mutation:
+          url: https://github.com/chrisparnin/checkbox.io-micro-preview
+          iterations: 3
+          snapshots:
+            - http://localhost:3000/survey/long.md
+            - http://localhost:3000/survey/upload.md
+            - http://localhost:3000/survey/survey.md
+            - http://localhost:3000/survey/variations.md
